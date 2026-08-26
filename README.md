@@ -103,13 +103,24 @@ recipe, a 0.07% difference from the monomer length filter alone.
 ## Options
 
 ```
+Draw tandem-repeat arrays across many genomes: annotate, cut monomers,
+colour them with chromomer, plot one figure per chromosome.
+
+  arrayscape -o out *.fasta                      # TRASH, the default
+  arrayscape -o out --annotator fastan *.fasta   # FasTAN
+  arrayscape -o out --from-monomers *.monomers.fasta
+
+Every genome is independent until the colouring, so each stage is one GNU
+parallel fan-out. The embedding is fitted once over every monomer from every
+genome, which is the point: a colour then means the same thing in each row.
+
   -o DIR              output directory (default out)
   -j N                parallel jobs (default: nproc)
   --annotator NAME    trash (default) or fastan
   --class NAME        TRASH repeat class (default 178_1)
   --period N          repeat period for FasTAN, and the monomer length (default 178)
   --tol F             fractional length tolerance on a monomer (default 0.15)
-  --from-annotations  inputs are existing TRASH csv or FasTAN .1ano
+  --from-annotations  inputs are existing TRASH *_repeats_with_seq.csv or FasTAN *.1ano
   --from-monomers     inputs are already monomer fastas named <genome>.*
   --bins N            horizontal resolution of a row (default 3000)
   --smooth N          rolling mean over N columns (default 9)

@@ -29,7 +29,9 @@ die() { echo "arrayscape: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
-    sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+    # the whole leading comment block, however long it grows
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' \
+        "${BASH_SOURCE[0]}"
     cat <<'EOF'
 
   -o DIR              output directory (default out)
