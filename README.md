@@ -4,6 +4,12 @@ Draw tandem-repeat arrays across many genomes: annotate every assembly, cut
 the monomers out, colour them with [chromomer](https://github.com/mbeavitt/chromomer),
 and draw one figure per chromosome with the assemblies stacked as rows.
 
+![CEN178 arrays across 155 A. thaliana assemblies, chromosome 1](docs/example_Chr1.jpg)
+
+*Chromosome 1 of 155 A. thaliana pangenome assemblies: 12.3 million CEN178
+monomers, each row one assembly, centred on its own centromere, coloured by
+5-mer composition.*
+
 The embedding is fitted once over every monomer from every genome, which is the
 whole point — a colour then means the same thing in every row and every
 chromosome, so a block of shared colour is a real statement about shared
@@ -71,7 +77,13 @@ colour them with chromomer, plot one figure per chromosome.
   arrayscape -o out --from-monomers *.monomers.fasta
 
 Every genome is independent until the colouring, so each stage is one GNU
-parallel fan-out. The embedding is fitted once over every monomer from every
+parallel fan-out. ![CEN178 arrays across 155 A. thaliana assemblies, chromosome 1](docs/example_Chr1.jpg)
+
+*Chromosome 1 of 155 A. thaliana pangenome assemblies: 12.3 million CEN178
+monomers, each row one assembly, centred on its own centromere, coloured by
+5-mer composition.*
+
+The embedding is fitted once over every monomer from every
 genome, which is the point: a colour then means the same thing in each row.
 
   -o DIR              output directory (default out)

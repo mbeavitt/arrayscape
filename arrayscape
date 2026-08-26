@@ -16,7 +16,7 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 annotator=trash
 outdir=out
 jobs=$(nproc)
-klass=178_1          # TRASH class name
+klass=              # TRASH class name; empty means select by period
 period=178           # FasTAN period, and the monomer length for either route
 tol=0.15
 bins=3000
@@ -37,7 +37,9 @@ usage() {
   -o DIR              output directory (default out)
   -j N                parallel jobs (default: nproc)
   --annotator NAME    trash (default) or fastan
-  --class NAME        TRASH repeat class (default 178_1)
+  --class NAME        one exact TRASH class; default is every class of --period,
+                      because TRASH's class suffix is a per-run index and the
+                      same array is 178_1 in one assembly and 178_2 in the next
   --period N          repeat period for FasTAN, and the monomer length (default 178)
   --tol F             fractional length tolerance on a monomer (default 0.15)
   --from-annotations  inputs are existing TRASH *_repeats_with_seq.csv or FasTAN *.1ano
@@ -109,10 +111,13 @@ genomes|annotations)
         else
             csvs=("${args[@]}")
         fi
-        echo "[$(date +%T)] cutting $klass monomers from ${#csvs[@]} table(s)"
-        parallel -j "$jobs" --halt now,fail=1 \
-            "python3 $here/trash_monomers.py --class $klass --genome {/.} {} \
-                 > $outdir/monomers/{/.}.fasta" ::: "${csvs[@]}"
+        if [[ -n $klass ]]; then sel="--class $klass"; else sel="--period $period"; fi
+        echo "[$(date +%T)] cutting ${klass:-period-$period} monomers from ${#csvs[@]} table(s)"
+        # no --halt here: a genome with none of this repeat is a fact about that
+        # genome, and must not take the other 155 down with it
+        parallel -j "$jobs" \
+            "python3 $here/trash_monomers.py $sel --genome {/.} {} \
+                 > $outdir/monomers/{/.}.fasta 2>> $outdir/logs/cut.log" ::: "${csvs[@]}"
         # trash-py names the table <genome>.fasta_repeats_with_seq.csv
         for f in "$outdir"/monomers/*.fasta; do
             b=$(basename "$f" .fasta); n=${b%%.fasta_repeats_with_seq}
@@ -137,7 +142,7 @@ genomes|annotations)
         echo "[$(date +%T)] cutting period-$period monomers from ${#anos[@]} annotation(s)"
         # ANOtoBED emits contig coordinates upstream; ano_monomers.py detects
         # that and rebases them with the contig table from GDBshow -h.
-        parallel -j "$jobs" --halt now,fail=1 "
+        parallel -j "$jobs" "
             b={.}; g={/.}
             ANOtoBED \$b.1ano | awk -v p=$period '
                 \$1 == \"#\" { if (keep) print; next }
@@ -160,6 +165,13 @@ genomes|annotations)
 esac
 
 # ------------------------------------------------------------------ gather --
+# drop genomes that yielded nothing rather than emitting empty rows
+empty=0
+for f in "$outdir"/monomers/*.fasta; do
+    [[ -s $f ]] || { echo "  no monomers: $(basename "$f" .fasta)" >&2; rm -f "$f"; empty=$((empty+1)); }
+done
+(( empty )) && echo "WARNING: $empty genome(s) yielded no monomers and were dropped" >&2
+
 all="$outdir/monomers.fasta"
 cat "$outdir"/monomers/*.fasta > "$all"
 n=$(grep -c '^>' "$all" || true)
