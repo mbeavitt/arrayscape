@@ -60,46 +60,6 @@ identifiers it found and how many genomes each appears in, and warns about:
 None of these stop the run. They matter because each variant becomes its own
 band of rows in the figure, which is easy to miss and easy to misread.
 
-## The FasTAN coordinate problem
-
-FAtoGDB breaks every scaffold at each run of non-ACGT, and FasTAN stores its
-masks per contig, so they are in **contig** coordinates. Upstream `ANOtoBED`
-prints those numbers beside the *scaffold* name, so any interval past the first
-gap in a scaffold is short by the summed length of the preceding contigs and
-gaps — a shift of megabases on a gappy assembly, and one that no bounds check
-catches, because a shifted coordinate is still inside the scaffold.
-
-`ano_monomers.py` reads the real contig layout out of the GDB with `GDBshow -h`
-
-```
->Chr1 <0,5538260] :: Contig 1 <0,5538260>
->Chr1 [5538360,29508191> :: Contig 2 <0,23969831>
-```
-
-and adds each contig's scaffold start back onto its own intervals — the same
-correction a patched ANOtoBED makes at the print. Contig coordinates restart at
-zero at every boundary while scaffold coordinates do not, so which of the two
-you have is detectable, and a patched ANOtoBED is left alone. Override the
-guess with `--assume contig|scaffold` if you ever need to.
-
-This deliberately does **not** raise FAtoGDB's minimum gap length to stop it
-splitting: that changes which annotation you get, not merely how it is
-reported.
-
-Note that only the interval moves. The `# Parse:` points ANOtoBED prints are
-offsets from the interval's own start, not coordinates -- which is how
-`rephase.py` reads them (`beg + points[i]`) -- so a monomer runs from
-`beg + points[i]` to `beg + points[i+1]` and the offsets themselves must be
-left alone. Shifting them as well double-counts the contig offset.
-
-Verified by round trip on *A. thaliana* Chr1 (2 contigs, 4,738 intervals):
-subtracting each contig's `sbeg` from patched output reproduces what upstream
-emits, and translating that back recovers the patched intervals exactly and
-yields all 15,011 monomers identically, correcting shifts of up to 5,538,360 bp.
-On a whole assembly the resulting Chr1 monomers span 14,280,540-18,437,782 --
-the centromere -- and come to 69,842 against 69,894 from the established
-recipe, a 0.07% difference from the monomer length filter alone.
-
 ## Options
 
 ```
