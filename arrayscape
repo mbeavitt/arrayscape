@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Paint tandem-repeat arrays across many genomes: annotate, cut monomers,
+# Draw tandem-repeat arrays across many genomes: annotate, cut monomers,
 # colour them with chromomer, plot one figure per chromosome.
 #
-#   arraypaint -o out *.fasta                      # TRASH, the default
-#   arraypaint -o out --annotator fastan *.fasta   # FasTAN
-#   arraypaint -o out --from-monomers *.monomers.fasta
+#   arrayscape -o out *.fasta                      # TRASH, the default
+#   arrayscape -o out --annotator fastan *.fasta   # FasTAN
+#   arrayscape -o out --from-monomers *.monomers.fasta
 #
 # Every genome is independent until the colouring, so each stage is one GNU
 # parallel fan-out. The embedding is fitted once over every monomer from every
@@ -25,7 +25,7 @@ smooth=9
 from=genomes         # genomes | annotations | monomers
 keep_temp=0
 
-die() { echo "arraypaint: $*" >&2; exit 1; }
+die() { echo "arrayscape: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
@@ -166,12 +166,12 @@ echo "[$(date +%T)] $(printf "%'d" "$n") monomers from $(ls "$outdir"/monomers/*
 
 python3 "$here/chrom_check.py" "$all" | tee "$outdir/chromosomes.txt"
 
-# ------------------------------------------------------------------- paint --
+# ------------------------------------------------------------------- plot --
 echo "[$(date +%T)] chromomer"
 chromomer "$all" --fit-stride 8 -o "$outdir/colours.tsv"
 
-echo "[$(date +%T)] painting"
-python3 "$here/paint.py" "$outdir/colours.tsv" -o "$outdir/plots" \
+echo "[$(date +%T)] plotting"
+python3 "$here/plot_arrays.py" "$outdir/colours.tsv" -o "$outdir/plots" \
     --bins "$bins" --smooth "$smooth" $align
 
 (( keep_temp )) || rm -rf "$work"

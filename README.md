@@ -1,6 +1,6 @@
-# arraypaint
+# arrayscape
 
-Paint tandem-repeat arrays across many genomes: annotate every assembly, cut
+Draw tandem-repeat arrays across many genomes: annotate every assembly, cut
 the monomers out, colour them with [chromomer](https://github.com/mbeavitt/chromomer),
 and draw one figure per chromosome with the assemblies stacked as rows.
 
@@ -23,16 +23,16 @@ pip install git+https://github.com/mbeavitt/chromomer
 ## Use
 
 ```
-arraypaint -o out *.fasta                       # TRASH
-arraypaint -o out --annotator fastan *.fasta    # FasTAN
+arrayscape -o out *.fasta                       # TRASH
+arrayscape -o out --annotator fastan *.fasta    # FasTAN
 ```
 
 Or start part-way in, if the slow stage is already done:
 
 ```
-arraypaint -o out --from-annotations *_repeats_with_seq.csv   # after trash-py
-arraypaint -o out --annotator fastan --from-annotations *.1ano
-arraypaint -o out --from-monomers *.monomers.fasta
+arrayscape -o out --from-annotations *_repeats_with_seq.csv   # after trash-py
+arrayscape -o out --annotator fastan --from-annotations *.1ano
+arrayscape -o out --from-monomers *.monomers.fasta
 ```
 
 Output:
@@ -43,7 +43,7 @@ out/
   monomers.fasta            everything, concatenated
   chromosomes.txt           the identifier report
   colours.tsv               the chromomer table
-  plots/paint_<chrom>.png   one figure per chromosome
+  plots/<chrom>.png         one figure per chromosome
   logs/                     per-genome annotator and coordinate logs
 ```
 

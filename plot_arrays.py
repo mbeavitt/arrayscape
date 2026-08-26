@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paint monomer arrays from a chromomer table: one row per genome, one plot
+"""Draw monomer arrays from a chromomer table: one row per genome, one plot
 per chromosome.
 
 Reads the table `chromomer` writes and pulls the genome, chromosome and
@@ -7,7 +7,7 @@ position out of the id column, so a single table covering many assemblies
 becomes one figure per chromosome with the assemblies stacked as rows.
 
     chromomer monomers.fasta > colours.tsv
-    chromomer-paint colours.tsv -o plots/
+    plot_arrays.py colours.tsv -o plots/
 
 Ids are parsed with --id-regex, which must supply named groups `genome`,
 `chrom` and `start` (`end` optional). The default matches
@@ -59,7 +59,7 @@ def read_table(path, id_re):
         sys.exit("no ids matched --id-regex; check the id format")
     if skipped:
         # silence here would be dangerous: a regex that fits only part of the
-        # table would quietly paint a subset and look perfectly fine
+        # table would quietly plot a subset and look perfectly fine
         print(f"warning: {skipped:,} of {skipped + len(genomes):,} ids did not "
               f"match --id-regex and were dropped", file=sys.stderr)
     gnames, gidx = np.unique(genomes, return_inverse=True)
@@ -114,7 +114,7 @@ def tracks(gidx, mids, pcs, ngenomes, nbins, align, smooth, keep=0.99):
     return mean, n, lo, hi
 
 
-def paint(mean, n):
+def render(mean, n):
     """Colour the filled bins, scaling over the bins actually drawn.
 
     Each chromosome is normalised against its own median bin, so colour is
@@ -233,7 +233,7 @@ def main():
         keep = n.sum(1) > 0                       # genomes present on this chromosome
         mean, n = mean[keep], n[keep]
         names = gnames[keep]
-        img = paint(mean, n)
+        img = render(mean, n)
         row = order_rows(mean, n, args.order, names)
         img, mean, n, names = img[row], mean[row], n[row], names[row]
 
@@ -251,7 +251,7 @@ def main():
         if not args.no_key:
             k = fig.add_axes((0.885, 0.80, 0.075, 0.075 * 14 / 11))
             colour_key(k, mean, n)
-        out = os.path.join(args.outdir, f"paint_{chrom}.png")
+        out = os.path.join(args.outdir, f"{chrom}.png")
         fig.savefig(out, dpi=260, facecolor="white")
         plt.close(fig)
         print(f"  {out}  {len(names)} genomes", file=sys.stderr)

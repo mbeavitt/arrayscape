@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report the chromosome identifiers in a monomer fasta and flag odd ones.
 
-A pangenome painting only makes sense if the assemblies agree on what to call
+A figure across a pangenome only makes sense if the assemblies agree on what to call
 a chromosome. They frequently do not: one assembly says `Chr1`, another `chr1`,
 a third carries unplaced scaffolds through. Each variant becomes its own row
 band in the figure and the mismatch is easy to miss, so it is worth saying out
