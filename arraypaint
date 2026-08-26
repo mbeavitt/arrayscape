@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# Paint tandem-repeat arrays across many genomes: annotate, cut monomers,
+# colour them with chromomer, plot one figure per chromosome.
+#
+#   arraypaint -o out *.fasta                      # TRASH, the default
+#   arraypaint -o out --annotator fastan *.fasta   # FasTAN
+#   arraypaint -o out --from-monomers *.monomers.fasta
+#
+# Every genome is independent until the colouring, so each stage is one GNU
+# parallel fan-out. The embedding is fitted once over every monomer from every
+# genome, which is the point: a colour then means the same thing in each row.
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+annotator=trash
+outdir=out
+jobs=$(nproc)
+klass=178_1          # TRASH class name
+period=178           # FasTAN period, and the monomer length for either route
+tol=0.15
+bins=3000
+align=--align
+smooth=9
+from=genomes         # genomes | annotations | monomers
+keep_temp=0
+
+die() { echo "arraypaint: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+    sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+    cat <<'EOF'
+
+  -o DIR              output directory (default out)
+  -j N                parallel jobs (default: nproc)
+  --annotator NAME    trash (default) or fastan
+  --class NAME        TRASH repeat class (default 178_1)
+  --period N          repeat period for FasTAN, and the monomer length (default 178)
+  --tol F             fractional length tolerance on a monomer (default 0.15)
+  --from-annotations  inputs are existing TRASH *_repeats_with_seq.csv or FasTAN *.1ano
+  --from-monomers     inputs are already monomer fastas named <genome>.*
+  --bins N            horizontal resolution of a row (default 3000)
+  --smooth N          rolling mean over N columns (default 9)
+  --no-align          plot absolute position instead of offset from centromere
+  --keep-temp         keep the per-genome working files
+EOF
+    exit "${1:-0}"
+}
+
+args=()
+while (( $# )); do
+    case "$1" in
+        -o) outdir=$2; shift 2 ;;
+        -j) jobs=$2; shift 2 ;;
+        --annotator) annotator=$2; shift 2 ;;
+        --class) klass=$2; shift 2 ;;
+        --period) period=$2; shift 2 ;;
+        --tol) tol=$2; shift 2 ;;
+        --from-annotations) from=annotations; shift ;;
+        --from-monomers) from=monomers; shift ;;
+        --bins) bins=$2; shift 2 ;;
+        --smooth) smooth=$2; shift 2 ;;
+        --no-align) align=; shift ;;
+        --keep-temp) keep_temp=1; shift ;;
+        -h|--help) usage 0 ;;
+        -*) die "unknown option $1 (--help)" ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+(( ${#args[@]} )) || usage 1
+
+have parallel || die "GNU parallel is not on PATH"
+# --bar writes to /dev/tty, which does not exist under nohup or in a pipeline
+bar=; [[ -t 2 ]] && bar=--bar
+have chromomer || die "chromomer is not on PATH (pip install chromomer)"
+
+mkdir -p "$outdir"/{monomers,logs}
+work="$outdir/work"
+mkdir -p "$work"
+
+# ---------------------------------------------------------------- annotate --
+# Each branch has one job: end up with $outdir/monomers/<genome>.fasta whose
+# headers read <genome>|<chrom>:<start>-<end>, which is what chromomer's ids
+# become and what the plot parses back out.
+
+case "$from" in
+monomers)
+    echo "[$(date +%T)] using ${#args[@]} monomer fasta(s) as given"
+    for f in "${args[@]}"; do
+        g=$(basename "$f"); g=${g%%.*}
+        # headers may or may not already carry the genome; add it if not
+        awk -v s="$g" '/^>/ { if ($0 ~ /\|/) print; else print ">" s "|" substr($0,2); next } { print }' \
+            "$f" > "$outdir/monomers/$g.fasta"
+    done
+    ;;
+
+genomes|annotations)
+    if [[ $annotator == trash ]]; then
+        have trash-py || die "trash-py is not on PATH"
+        if [[ $from == genomes ]]; then
+            echo "[$(date +%T)] TRASH over ${#args[@]} genome(s) at -j$jobs"
+            parallel -j "$jobs" $bar --halt now,fail=1 \
+                "trash-py -q -f {} -o $work/{/.} -n {/.} > $outdir/logs/{/.}.trash.log 2>&1" \
+                ::: "${args[@]}"
+            csvs=("$work"/*/*_repeats_with_seq.csv)
+        else
+            csvs=("${args[@]}")
+        fi
+        echo "[$(date +%T)] cutting $klass monomers from ${#csvs[@]} table(s)"
+        parallel -j "$jobs" --halt now,fail=1 \
+            "python3 $here/trash_monomers.py --class $klass --genome {/.} {} \
+                 > $outdir/monomers/{/.}.fasta" ::: "${csvs[@]}"
+        # trash-py names the table <genome>.fasta_repeats_with_seq.csv
+        for f in "$outdir"/monomers/*.fasta; do
+            b=$(basename "$f" .fasta); n=${b%%.fasta_repeats_with_seq}
+            [[ $b == "$n" ]] || mv -f "$f" "$outdir/monomers/$n.fasta"
+        done
+    else
+        have FasTAN   || die "FasTAN is not on PATH"
+        have ANOtoBED || die "ANOtoBED is not on PATH"
+        have GDBshow  || die "GDBshow is not on PATH"
+        have samtools || die "samtools is not on PATH"
+        if [[ $from == genomes ]]; then
+            have FAtoGDB || die "FAtoGDB is not on PATH"
+            echo "[$(date +%T)] FAtoGDB + FasTAN over ${#args[@]} genome(s) at -j$jobs"
+            parallel -j "$jobs" $bar --halt now,fail=1 \
+                "cp -f {} $work/{/.}.fasta && FAtoGDB $work/{/.}.fasta \
+                 && FasTAN -T1 -vamp $work/{/.}.1gdb > $outdir/logs/{/.}.fastan.log 2>&1" \
+                ::: "${args[@]}"
+            anos=("$work"/*.1ano)
+        else
+            anos=("${args[@]}")
+        fi
+        echo "[$(date +%T)] cutting period-$period monomers from ${#anos[@]} annotation(s)"
+        # ANOtoBED emits contig coordinates upstream; ano_monomers.py detects
+        # that and rebases them with the contig table from GDBshow -h.
+        parallel -j "$jobs" --halt now,fail=1 "
+            b={.}; g={/.}
+            ANOtoBED \$b.1ano | awk -v p=$period '
+                \$1 == \"#\" { if (keep) print; next }
+                \$4 == p    { print; keep = 1; next }
+                            { keep = 0 }' > $work/\$g.class.bed
+            python3 $here/ano_monomers.py --gdb \$b.1gdb --bed $work/\$g.class.bed \
+                --period $period --tol $tol > $work/\$g.monomers.bed \
+                2> $outdir/logs/\$g.coords.log
+            awk '\$6 == \"+\" { print \$1 \":\" \$2 + 1 \"-\" \$3 }' $work/\$g.monomers.bed \
+                | samtools faidx -r /dev/stdin \$b.fasta > $work/\$g.fwd.fa
+            awk '\$6 == \"-\" { print \$1 \":\" \$2 + 1 \"-\" \$3 }' $work/\$g.monomers.bed \
+                | samtools faidx -i -r /dev/stdin \$b.fasta > $work/\$g.rev.fa
+            cat $work/\$g.fwd.fa $work/\$g.rev.fa \
+                | awk -v s=\$g '/^>/ { print \">\" s \"|\" substr(\$0,2); next } { print }' \
+                > $outdir/monomers/\$g.fasta
+        " ::: "${anos[@]}"
+    fi
+    ;;
+*) die "internal: unknown source $from" ;;
+esac
+
+# ------------------------------------------------------------------ gather --
+all="$outdir/monomers.fasta"
+cat "$outdir"/monomers/*.fasta > "$all"
+n=$(grep -c '^>' "$all" || true)
+(( n )) || die "no monomers were produced"
+echo "[$(date +%T)] $(printf "%'d" "$n") monomers from $(ls "$outdir"/monomers/*.fasta | wc -l) genome(s)"
+
+python3 "$here/chrom_check.py" "$all" | tee "$outdir/chromosomes.txt"
+
+# ------------------------------------------------------------------- paint --
+echo "[$(date +%T)] chromomer"
+chromomer "$all" --fit-stride 8 -o "$outdir/colours.tsv"
+
+echo "[$(date +%T)] painting"
+python3 "$here/paint.py" "$outdir/colours.tsv" -o "$outdir/plots" \
+    --bins "$bins" --smooth "$smooth" $align
+
+(( keep_temp )) || rm -rf "$work"
+echo "[$(date +%T)] done -> $outdir/plots/"
