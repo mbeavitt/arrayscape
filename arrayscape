@@ -25,6 +25,7 @@ smooth=9
 from=genomes         # genomes | annotations | monomers
 keep_temp=0
 rephase=1
+reference=          # shared reference monomer; empty means build one per run
 
 die() { echo "arrayscape: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -48,6 +49,9 @@ usage() {
   --bins N            horizontal resolution of a row (default 3000)
   --smooth N          rolling mean over N columns (default 9)
   --no-align          plot absolute position instead of offset from centromere
+  --reference FILE    rephase onto this reference monomer instead of building
+                      one per run. Two runs are only comparable to each other
+                      if they share it
   --no-rephase        skip putting every array in one rotational frame. Only do
                       this if you know your monomers are already phased: an
                       annotator picks the cut point per array, and that choice
@@ -73,6 +77,7 @@ while (( $# )); do
         --no-align) align=; shift ;;
         --keep-temp) keep_temp=1; shift ;;
         --no-rephase) rephase=0; shift ;;
+        --reference) reference=$2; shift 2 ;;
         -h|--help) usage 0 ;;
         -*) die "unknown option $1 (--help)" ;;
         *) args+=("$1"); shift ;;
@@ -184,9 +189,14 @@ done
 # removes that, and settles orientation at the same time.
 if (( rephase )); then
     ref="$outdir/reference.fasta"
-    big=$(ls -S "$outdir"/monomers/*.fasta | head -1)
-    echo "[$(date +%T)] reference monomer from $(basename "$big" .fasta)"
-    python3 "$here/rephase.py" --build-reference --period "$period" "$big" > "$ref"
+    if [[ -n $reference ]]; then
+        cp -f "$reference" "$ref"
+        echo "[$(date +%T)] reference monomer supplied: $reference"
+    else
+        big=$(ls -S "$outdir"/monomers/*.fasta | head -1)
+        echo "[$(date +%T)] reference monomer from $(basename "$big" .fasta)"
+        python3 "$here/rephase.py" --build-reference --period "$period" "$big" > "$ref"
+    fi
     echo "[$(date +%T)] rephasing $(ls "$outdir"/monomers/*.fasta | wc -l) genome(s)"
     parallel -j "$jobs" "
         python3 $here/rephase.py --reference $ref --period $period {} > {}.ph \
