@@ -24,6 +24,7 @@ align=--align
 smooth=9
 from=genomes         # genomes | annotations | monomers
 keep_temp=0
+rephase=1
 
 die() { echo "arrayscape: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -47,6 +48,10 @@ usage() {
   --bins N            horizontal resolution of a row (default 3000)
   --smooth N          rolling mean over N columns (default 9)
   --no-align          plot absolute position instead of offset from centromere
+  --no-rephase        skip putting every array in one rotational frame. Only do
+                      this if you know your monomers are already phased: an
+                      annotator picks the cut point per array, and that choice
+                      otherwise dominates the composition it is measured by
   --keep-temp         keep the per-genome working files
 EOF
     exit "${1:-0}"
@@ -67,6 +72,7 @@ while (( $# )); do
         --smooth) smooth=$2; shift 2 ;;
         --no-align) align=; shift ;;
         --keep-temp) keep_temp=1; shift ;;
+        --no-rephase) rephase=0; shift ;;
         -h|--help) usage 0 ;;
         -*) die "unknown option $1 (--help)" ;;
         *) args+=("$1"); shift ;;
@@ -115,14 +121,13 @@ genomes|annotations)
         echo "[$(date +%T)] cutting ${klass:-period-$period} monomers from ${#csvs[@]} table(s)"
         # no --halt here: a genome with none of this repeat is a fact about that
         # genome, and must not take the other 155 down with it
-        parallel -j "$jobs" \
-            "python3 $here/trash_monomers.py $sel --genome {/.} {} \
-                 > $outdir/monomers/{/.}.fasta 2>> $outdir/logs/cut.log" ::: "${csvs[@]}"
-        # trash-py names the table <genome>.fasta_repeats_with_seq.csv
-        for f in "$outdir"/monomers/*.fasta; do
-            b=$(basename "$f" .fasta); n=${b%%.fasta_repeats_with_seq}
-            [[ $b == "$n" ]] || mv -f "$f" "$outdir/monomers/$n.fasta"
-        done
+        # trash-py names its table <genome>_repeats_with_seq.csv, so strip that
+        # back off to recover the genome name rather than renaming afterwards
+        parallel -j "$jobs" "
+            g={/.}; g=\${g%_repeats_with_seq}; g=\${g%.fasta}
+            python3 $here/trash_monomers.py $sel --genome \$g {} \
+                > $outdir/monomers/\$g.fasta 2>> $outdir/logs/cut.log
+        " ::: "${csvs[@]}"
     else
         have FasTAN   || die "FasTAN is not on PATH"
         have ANOtoBED || die "ANOtoBED is not on PATH"
@@ -171,6 +176,23 @@ for f in "$outdir"/monomers/*.fasta; do
     [[ -s $f ]] || { echo "  no monomers: $(basename "$f" .fasta)" >&2; rm -f "$f"; empty=$((empty+1)); }
 done
 (( empty )) && echo "WARNING: $empty genome(s) yielded no monomers and were dropped" >&2
+
+# ----------------------------------------------------------------- rephase --
+# An annotator picks where a repeat unit starts, per array and arbitrarily, so
+# two arrays of the same satellite are cut at different points and land in
+# different places in k-mer space. Rotating every array onto one reference
+# removes that, and settles orientation at the same time.
+if (( rephase )); then
+    ref="$outdir/reference.fasta"
+    big=$(ls -S "$outdir"/monomers/*.fasta | head -1)
+    echo "[$(date +%T)] reference monomer from $(basename "$big" .fasta)"
+    python3 "$here/rephase.py" --build-reference --period "$period" "$big" > "$ref"
+    echo "[$(date +%T)] rephasing $(ls "$outdir"/monomers/*.fasta | wc -l) genome(s)"
+    parallel -j "$jobs" "
+        python3 $here/rephase.py --reference $ref --period $period {} > {}.ph \
+            2>> $outdir/logs/rephase.log && mv -f {}.ph {}
+    " ::: "$outdir"/monomers/*.fasta
+fi
 
 all="$outdir/monomers.fasta"
 cat "$outdir"/monomers/*.fasta > "$all"

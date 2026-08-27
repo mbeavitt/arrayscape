@@ -147,6 +147,18 @@ def distances(mean, n):
     return d
 
 
+def order_from_file(path, names):
+    """Row order taken from a file, one genome per line.
+
+    Anything the file does not mention keeps its relative order at the end,
+    so a partial list still works and nothing is silently dropped.
+    """
+    want = [l.strip() for l in open(path) if l.strip()]
+    rank = {g: i for i, g in enumerate(want)}
+    return np.array(sorted(range(len(names)),
+                           key=lambda i: (rank.get(names[i], len(rank)), names[i])))
+
+
 def order_rows(mean, n, how, names):
     """Row order: alphabetical, or each genome next to the one it matches best.
 
@@ -212,6 +224,10 @@ def main():
                     help="rolling mean over N columns (default 9, 1 = off)")
     ap.add_argument("--order", choices=("name", "similarity"), default="similarity",
                     help="row order (default similarity)")
+    ap.add_argument("--order-from", metavar="FILE",
+                    help="take the row order from this file, one genome per line "
+                         "(overrides --order; the order used is always written "
+                         "alongside each figure as <chrom>.order.txt)")
     ap.add_argument("--id-regex", default=DEFAULT_ID_RE,
                     help="regex with named groups genome, chrom, start[, end]")
     ap.add_argument("--no-key", action="store_true", help="omit the PC1/PC2 key")
@@ -234,7 +250,8 @@ def main():
         mean, n = mean[keep], n[keep]
         names = gnames[keep]
         img = render(mean, n)
-        row = order_rows(mean, n, args.order, names)
+        row = (order_from_file(args.order_from, names) if args.order_from
+               else order_rows(mean, n, args.order, names))
         img, mean, n, names = img[row], mean[row], n[row], names[row]
 
         fig, ax = plt.subplots(figsize=(14, 11), constrained_layout=True)
@@ -251,6 +268,8 @@ def main():
         if not args.no_key:
             k = fig.add_axes((0.885, 0.80, 0.075, 0.075 * 14 / 11))
             colour_key(k, mean, n)
+        with open(os.path.join(args.outdir, f"{chrom}.order.txt"), "w") as fh:
+            fh.write("\n".join(names) + "\n")
         out = os.path.join(args.outdir, f"{chrom}.png")
         fig.savefig(out, dpi=260, facecolor="white")
         plt.close(fig)
