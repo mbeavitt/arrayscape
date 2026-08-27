@@ -56,18 +56,30 @@ def contig_table(gdb, gdbshow="GDBshow"):
 
 def read_bed(path):
     """ANOtoBED output: comment lines carry the parse points for the interval
-    that precedes them, so the two travel together."""
+    that precedes them, so the two travel together.
+
+    Data lines are split on TAB, not on whitespace: ANOtoBED prints the whole
+    FASTA header as the first field, and outside toy assemblies that header has
+    spaces in it ("CM026974.1 Rattus norvegicus strain ... chromosome 1"), so
+    whitespace splitting silently reads a word as the start coordinate. Only the
+    first token is kept as the sequence name, which is what samtools and every
+    other tool downstream uses.
+    """
     out = []
     with open(path) as fh:
         for line in fh:
-            f = line.split()
-            if not f:
+            line = line.rstrip("\n")
+            if not line:
                 continue
-            if f[0] == "#":
+            if line.startswith("#"):
+                f = line.split()
                 if out and len(f) > 1 and f[1] == "Parse:":
                     out[-1][3] = [int(x) for x in f[2:]]
-            elif not f[0].startswith("#"):
-                out.append([f[0], int(f[1]), int(f[2]), None, f[3:]])
+                continue
+            f = line.split("\t")
+            if len(f) < 3:
+                continue
+            out.append([f[0].split()[0], int(f[1]), int(f[2]), None, f[3:]])
     return out
 
 
@@ -147,7 +159,8 @@ def monomers(bed, period, tol):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--gdb", required=True, help="the .1gdb the .1ano came from")
+    ap.add_argument("--gdb", help="the .1gdb the .1ano came from; only needed "
+                                  "when contig coordinates must be translated")
     ap.add_argument("--bed", required=True, help="ANOtoBED output for one class")
     ap.add_argument("--period", type=int, required=True, help="repeat period, e.g. 178")
     ap.add_argument("--tol", type=float, default=0.15,
@@ -157,14 +170,18 @@ def main():
                     help="coordinate space of the bed (default auto-detect)")
     args = ap.parse_args()
 
-    contigs = contig_table(args.gdb, args.gdbshow)
     bed = read_bed(args.bed)
     if not bed:
         sys.exit(f"{args.bed}: no intervals")
 
     space = args.assume
     if space == "auto":
-        space = "scaffold" if already_scaffold_coords(bed, contigs) else "contig"
+        if not args.gdb:
+            sys.exit("--gdb is needed to detect the coordinate space; "
+                     "pass --assume scaffold or --assume contig if you know it")
+        space = ("scaffold" if already_scaffold_coords(bed, contig_table(args.gdb, args.gdbshow))
+                 else "contig")
+    contigs = contig_table(args.gdb, args.gdbshow) if space == "contig" else []
     if space == "contig":
         bed = translate(bed, contigs)
         print(f"{args.bed}: translated contig -> scaffold coordinates "
