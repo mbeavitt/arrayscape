@@ -114,17 +114,19 @@ def tracks(gidx, mids, pcs, ngenomes, nbins, align, smooth, keep=0.99):
     return mean, n, lo, hi
 
 
-def render(mean, n):
-    """Colour the filled bins, scaling over the bins actually drawn.
+def render(mean, n, ref=None):
+    """Colour the filled bins.
 
-    Each chromosome is normalised against its own median bin, so colour is
-    departure from this chromosome's consensus and is not comparable between
-    figures.
+    `ref` is the set of points the median-centre and spread are taken from.
+    Pass the bins of every chromosome to make one colour mean one thing across
+    the whole set; pass None to normalise each chromosome against its own
+    consensus, which shows more contrast within a chromosome but cannot be
+    compared between them.
     """
     img = np.full(mean.shape, EMPTY, np.float32)
     filled = n > 0
     if filled.any():
-        img[filled] = colours(mean[filled].astype(np.float64))
+        img[filled] = colours(mean[filled].astype(np.float64), ref=ref)
     return img
 
 
@@ -159,45 +161,110 @@ def order_from_file(path, names):
                            key=lambda i: (rank.get(names[i], len(rank)), names[i])))
 
 
-def order_rows(mean, n, how, names):
-    """Row order: alphabetical, or each genome next to the one it matches best.
-
-    Walks a nearest-neighbour chain: start at the most atypical genome, then
-    repeatedly step to whichever genome not yet placed is closest to the one
-    just placed. Neighbouring rows are therefore the most similar pairs, which
-    a one-dimensional projection does not guarantee.
-    """
-    if how == "name":
-        return np.argsort(names)
+def _filled_distances(mean, n):
+    """Pairwise distance with NaNs replaced, so every method sees a full matrix."""
     d = distances(mean, n)
-    g = len(mean)
-    # a genome sharing too few bins with everything has an all-NaN row, so
-    # average only over the rows that have any comparison at all
-    comparable = ~np.all(np.isnan(d), axis=1)
-    typical = np.full(g, -np.inf)
-    if comparable.any():
-        typical[comparable] = np.nanmean(d[comparable], axis=1)
-    start = int(np.argmax(typical))
+    if np.isnan(d).all():
+        return np.zeros_like(d)
+    big = np.nanmax(d) * 1.5
+    d = np.where(np.isnan(d), big, d)
+    np.fill_diagonal(d, 0.0)
+    return d
 
+
+def order_chain(d):
+    """Greedy nearest-neighbour chain: start at the most atypical row, then
+    always step to the closest row not yet placed."""
+    g = len(d)
+    start = int(np.argmax(d.mean(axis=1)))
     order, left = [start], set(range(g)) - {start}
     while left:
         row = d[order[-1]]
-        cand = [j for j in left if not np.isnan(row[j])]
-        # nothing comparable left: restart the chain at whatever remains
-        nxt = min(cand, key=lambda j: row[j]) if cand else min(left)
-        order.append(nxt)
-        left.discard(nxt)
+        order.append(min(left, key=lambda j: row[j]))
+        left.discard(order[-1])
     return np.array(order)
 
 
-def colour_key(ax, mean, n, res=160):
+def order_spectral(d):
+    """Spectral seriation: sort on the Fiedler vector of the affinity graph.
+
+    Unlike a greedy chain this optimises the whole layout at once, so one
+    awkward row cannot send the rest of the ordering off down a side branch.
+    """
+    scale = np.median(d[d > 0]) if (d > 0).any() else 1.0
+    w = np.exp(-(d / (scale or 1.0)) ** 2)
+    np.fill_diagonal(w, 0.0)
+    deg = w.sum(axis=1)
+    lap = np.diag(deg) - w
+    with np.errstate(invalid="ignore", divide="ignore"):
+        inv = np.where(deg > 0, 1.0 / np.sqrt(deg), 0.0)
+    norm = inv[:, None] * lap * inv[None, :]
+    vals, vecs = np.linalg.eigh((norm + norm.T) / 2)
+    fiedler = vecs[:, np.argsort(vals)[1]] if len(vals) > 1 else vecs[:, 0]
+    return np.argsort(fiedler)
+
+
+def order_cluster(d):
+    """Average-linkage clustering, with each merge flipped to put the most
+    similar rows next to each other across the join.
+
+    This is the ordering a heatmap dendrogram gives you, and it keeps related
+    groups contiguous rather than merely locally similar.
+    """
+    clusters = {i: [i] for i in range(len(d))}
+    dist = {(i, j): d[i, j] for i in range(len(d)) for j in range(i + 1, len(d))}
+    while len(clusters) > 1:
+        (a, b), _ = min(dist.items(), key=lambda kv: kv[1])
+        A, B = clusters.pop(a), clusters.pop(b)
+        # orient both blocks so the rows meeting at the seam are the closest pair
+        best, joined = None, None
+        for x in (A, A[::-1]):
+            for y in (B, B[::-1]):
+                v = d[x[-1], y[0]]
+                if best is None or v < best:
+                    best, joined = v, x + y
+        clusters[a] = joined
+        dist = {k: v for k, v in dist.items() if b not in k and a not in k}
+        for c, members in clusters.items():
+            if c == a:
+                continue
+            key = (min(a, c), max(a, c))
+            dist[key] = float(np.mean([d[i, j] for i in joined for j in members]))
+    return np.array(next(iter(clusters.values())))
+
+
+def order_pc1(mean, n):
+    """Sort along the leading component of the binned tracks: a global gradient
+    rather than a path."""
+    x = np.where(n[:, :, None] > 0, mean, 0.0).reshape(len(mean), -1)
+    x = x - x.mean(0)
+    _, vecs = np.linalg.eigh(x @ x.T)
+    return np.argsort(vecs[:, -1])
+
+
+def order_rows(mean, n, how, names):
+    """Row order. `name` is alphabetical; the rest all try to put rows that
+    look alike next to each other, and disagree about how."""
+    if how == "name":
+        return np.argsort(names)
+    if how == "pc1":
+        return order_pc1(mean, n)
+    d = _filled_distances(mean, n)
+    if how == "spectral":
+        return order_spectral(d)
+    if how == "cluster":
+        return order_cluster(d)
+    return order_chain(d)
+
+
+def colour_key(ax, mean, n, res=160, ref=None):
     """The colour field itself over the PC1/PC2 plane, on the plot's own scale.
 
     A reference, not a data display: it shows what any given colour means,
     which a scatter of the points cannot, since the points hide the gamut
     wherever they happen not to fall.
     """
-    v = mean[n > 0].astype(np.float64)
+    v = mean[n > 0].astype(np.float64) if ref is None else ref
     centre, scale = scaling(v)
     gx, gy = np.meshgrid(np.linspace(-1, 1, res), np.linspace(-1, 1, res))
     grid = centre + np.stack([gx.ravel() * scale[0], gy.ravel() * scale[1],
@@ -222,8 +289,9 @@ def main():
     ap.add_argument("--bins", type=int, default=3000, help="horizontal resolution")
     ap.add_argument("--smooth", type=int, default=9, metavar="N",
                     help="rolling mean over N columns (default 9, 1 = off)")
-    ap.add_argument("--order", choices=("name", "similarity"), default="similarity",
-                    help="row order (default similarity)")
+    ap.add_argument("--order",
+                    choices=("name", "similarity", "spectral", "cluster", "pc1"),
+                    default="similarity", help="row order (default similarity)")
     ap.add_argument("--order-from", metavar="FILE",
                     help="take the row order from this file, one genome per line "
                          "(overrides --order; the order used is always written "
@@ -231,6 +299,14 @@ def main():
     ap.add_argument("--id-regex", default=DEFAULT_ID_RE,
                     help="regex with named groups genome, chrom, start[, end]")
     ap.add_argument("--no-key", action="store_true", help="omit the PC1/PC2 key")
+    ap.add_argument("--scale", choices=("chrom", "global"), default="chrom",
+                    help="normalise each chromosome against its own consensus "
+                         "(default: more contrast within a figure, but colours "
+                         "are not comparable between chromosomes), or take one "
+                         "scale from every chromosome at once")
+    ap.add_argument("--label-size", type=float, metavar="PT",
+                    help="row label size (default scales with the number of "
+                         "rows: readable for a handful, tiny for hundreds)")
     args = ap.parse_args()
 
     import matplotlib
@@ -242,14 +318,23 @@ def main():
     print(f"{len(mids):,} monomers  {len(gnames)} genomes  "
           f"{len(cnames)} chromosomes", file=sys.stderr)
 
+    binned = []
     for ci, chrom in enumerate(cnames):
         sel = cidx == ci
         mean, n, lo, hi = tracks(gidx[sel], mids[sel], pcs[sel], len(gnames),
                                  args.bins, args.align, args.smooth)
         keep = n.sum(1) > 0                       # genomes present on this chromosome
-        mean, n = mean[keep], n[keep]
-        names = gnames[keep]
-        img = render(mean, n)
+        binned.append((chrom, mean[keep], n[keep], gnames[keep], lo, hi))
+
+    ref = None
+    if args.scale == "global":
+        ref = np.concatenate([m[c > 0] for _, m, c, _, _, _ in binned
+                              if (c > 0).any()]).astype(np.float64)
+        print(f"colour scale taken from {len(ref):,} bins across "
+              f"{len(binned)} chromosomes", file=sys.stderr)
+
+    for chrom, mean, n, names, lo, hi in binned:
+        img = render(mean, n, ref=ref)
         row = (order_from_file(args.order_from, names) if args.order_from
                else order_rows(mean, n, args.order, names))
         img, mean, n, names = img[row], mean[row], n[row], names[row]
@@ -258,7 +343,9 @@ def main():
         ax.imshow(img, interpolation="nearest", aspect="auto",
                   extent=(lo / 1e6, hi / 1e6, len(names), 0))
         ax.set_yticks(np.arange(len(names)) + 0.5)
-        ax.set_yticklabels(names, fontsize=3.1)
+        # 3.1pt suits 150+ rows and is unreadable for 30, so scale it unless told
+        size = args.label_size or min(9.0, max(3.1, 220.0 / max(len(names), 1)))
+        ax.set_yticklabels(names, fontsize=size)
         ax.tick_params(axis="y", length=0, pad=1)
         ax.set_xlabel("offset from centromere (Mb)" if args.align else "position (Mb)",
                       fontsize=10, color="#52514e")
@@ -267,7 +354,7 @@ def main():
             ax.spines[side].set_visible(False)
         if not args.no_key:
             k = fig.add_axes((0.885, 0.80, 0.075, 0.075 * 14 / 11))
-            colour_key(k, mean, n)
+            colour_key(k, mean, n, ref=ref)
         with open(os.path.join(args.outdir, f"{chrom}.order.txt"), "w") as fh:
             fh.write("\n".join(names) + "\n")
         out = os.path.join(args.outdir, f"{chrom}.png")
